@@ -1,0 +1,93 @@
+name: Build Custom WSL2 Kernel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Linux Kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+      KERNEL_TAG: v7.2.8
+      KERNEL_BRANCH: omarchy7.2.8
+      KERNEL_DIR: kernel-source
+      CONFIG_FILE: configs/config-wsl.MAIN
+
+    steps:
+      - name: Checkout Your Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            flex \
+            bison \
+            libssl-dev \
+            libelf-dev \
+            libncurses-dev \
+            bc \
+            cpio \
+            kmod \
+            dwarves \
+            git
+
+      - name: Clone Linux Stable Kernel Source
+        run: |
+          git clone "$KERNEL_REPO" "$KERNEL_DIR"
+          cd "$KERNEL_DIR"
+
+          git checkout -b "$KERNEL_BRANCH" "$KERNEL_TAG"
+
+          echo "Kernel commit: $(git rev-parse HEAD)"
+          echo "Kernel version: $(make -s kernelrelease)"
+
+      - name: Configure Kernel
+        run: |
+          set -euo pipefail
+
+          test -f "$CONFIG_FILE"
+          cp "$CONFIG_FILE" "$KERNEL_DIR/.config"
+
+          make -C "$KERNEL_DIR" olddefconfig
+
+      - name: Compile Kernel
+        run: |
+          set -euo pipefail
+
+          make -C "$KERNEL_DIR" \
+            -j"$(nproc)" \
+            bzImage
+
+          test -s "$KERNEL_DIR/arch/x86/boot/bzImage"
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir -p dist
+
+          cp "$KERNEL_DIR/arch/x86/boot/bzImage" dist/bzImage
+
+          git -C "$KERNEL_DIR" rev-parse HEAD \
+            > dist/kernel-commit.txt
+
+          make -s -C "$KERNEL_DIR" kernelrelease \
+            > dist/kernel-version.txt
+
+          sha256sum dist/bzImage > dist/bzImage.sha256
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-wsl2-kernel-omarchy7.2.8
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
